@@ -11,7 +11,7 @@ import tempfile
 from pathlib import Path
 
 from docx import Document
-from docx.shared import RGBColor, Pt, Cm
+from docx.shared import RGBColor, Pt, Cm, Inches
 from docx.oxml.ns import qn
 from docx.oxml import OxmlElement
 
@@ -56,20 +56,26 @@ def set_style_font_color(doc, style_name, color=None, bold=None, size=None):
         style.font.size = size
 
 
-def shade_title_style(doc, size, text_color, bold=True, pad_v=Pt(16), pad_h_twips=180):
+def shade_title_style(doc, size, text_color, bold=True, space_before=Pt(16), pad_bottom=Pt(16), pad_h_twips=180):
     """Turn the Title style into a self-contained colored panel: shaded,
     inset a bit further than the paragraph's own indent so text never
-    touches the box edge, with equal top/bottom padding so a single-line
-    title sits vertically centered in its own box. Deliberately does NOT
-    bleed past the page margins — a paragraph's indent controls both the
-    shading extent and where its text starts (there's no way to make a
-    shaded box wider than its own text at the paragraph level), so a true
-    edge-to-edge bleed always drags the text uncomfortably close to the
-    page edge too. Staying within the margins keeps real breathing room on
-    every side and still reads as a deliberate title panel. A long title
-    wraps to multiple lines and the box grows to fit — nothing to collide
-    with. Only ever fires for policy-convention documents; templates never
-    trigger Pandoc's title-block path."""
+    touches the box edge. Deliberately does NOT bleed past the page
+    margins — a paragraph's indent controls both the shading extent and
+    where its text starts (there's no way to make a shaded box wider than
+    its own text at the paragraph level), so a true edge-to-edge bleed
+    always drags the text uncomfortably close to the page edge too.
+    Staying within the margins keeps real breathing room on every side.
+    A long title wraps to multiple lines and the box grows to fit —
+    nothing to collide with. Only ever fires for policy-convention
+    documents; templates never trigger Pandoc's title-block path.
+
+    space_before does double duty: it's both the box's internal top
+    padding AND the page-positioning push used to center the title on
+    the page (there's only one `space_before` knob per paragraph — no
+    separate "padding" vs "position" concept at this level). pad_bottom
+    stays small and is purely internal box padding, since the large gap
+    down to Author/Date is controlled separately, on Author's own
+    space_before."""
     style = doc.styles['Title']
     pPr = style.element.get_or_add_pPr()
     shd = OxmlElement('w:shd')
@@ -83,8 +89,8 @@ def shade_title_style(doc, size, text_color, bold=True, pad_v=Pt(16), pad_h_twip
     style.font.color.rgb = text_color
     style.font.size = size
     style.font.bold = bold
-    style.paragraph_format.space_before = pad_v
-    style.paragraph_format.space_after = pad_v
+    style.paragraph_format.space_before = space_before
+    style.paragraph_format.space_after = pad_bottom
     style.paragraph_format.line_spacing = 1.15
 
 
@@ -121,6 +127,19 @@ def main():
         )
         doc = Document(str(base_path))
 
+        # Pandoc's default reference.docx doesn't set page size/margins
+        # explicitly (python-docx reads them back as None) — pin them so
+        # the fixed vertical-positioning math below (centering the title,
+        # pinning the metadata near the bottom) is against known numbers,
+        # not whatever the rendering application happens to default to.
+        section = doc.sections[0]
+        section.page_width = Inches(8.5)
+        section.page_height = Inches(11)
+        section.top_margin = Inches(1)
+        section.bottom_margin = Inches(1)
+        section.left_margin = Inches(1)
+        section.right_margin = Inches(1)
+
         set_style_font_color(doc, 'Normal')
         set_style_font_color(doc, 'Heading 1', color=ACCENT, bold=True, size=Pt(18))
         set_style_font_color(doc, 'Heading 2', color=ACCENT, bold=True, size=Pt(14))
@@ -133,14 +152,39 @@ def main():
         # version/confidentiality/date string) sit outside it as plain
         # text — per direct feedback, metadata reads better outside the
         # colored block than crammed inside it.
-        shade_title_style(doc, size=Pt(24), text_color=RGBColor(0xFF, 0xFF, 0xFF))
+        #
+        # Vertical layout of the title page is a fixed-spacing
+        # approximation, not true centering/bottom-anchoring — Pandoc
+        # generates Title/Author/Date as plain top-down-flowing
+        # paragraphs, and there's no page-relative vertical anchor
+        # available at the paragraph-style level (that would need a
+        # full-page table cell with vAlign, which would have to wrap
+        # content Pandoc itself generates — not reachable via
+        # --reference-doc styling).
+        #
+        # These numbers are deliberately NOT tuned to look perfect for a
+        # 1-line title — they're tuned so a 2-line WRAPPED title (tested:
+        # "Remote Access and Bring-Your-Own-Device (BYOD) Security
+        # Policy") still fits within the 9in body area on an 8.5x11 page
+        # with a real buffer to spare, since the actual failure mode of
+        # cutting this too close isn't "looks slightly off-center" — it's
+        # the metadata paragraph silently overflowing onto a real page 2,
+        # shifting every subsequent page number by one (confirmed by
+        # testing: the first version of these numbers did exactly that).
+        # A 1-line title consequently sits a bit higher than dead-center
+        # with more breathing room above its metadata than a 2-line title
+        # gets — an accepted asymmetry given there's only one space_before
+        # knob per style and no per-document conditional logic available
+        # here. A 3-line title (no real policy name in this workspace
+        # gets close) would need these numbers revisited.
+        shade_title_style(doc, size=Pt(24), text_color=RGBColor(0xFF, 0xFF, 0xFF), space_before=Pt(300))
         style_meta_line(
             doc, 'Author', size=Pt(11), text_color=GRAY,
-            space_before=Pt(12), space_after=Pt(2),
+            space_before=Pt(200), space_after=Pt(2),
         )
         style_meta_line(
             doc, 'Date', size=Pt(10), text_color=GRAY,
-            space_after=Pt(14),
+            space_after=Pt(0),
         )
 
         # Page break before TOC Heading — separates the title page from the
@@ -148,8 +192,16 @@ def main():
         # fires for policy documents.
         doc.styles['TOC Heading'].paragraph_format.page_break_before = True
 
-        # Footer: centered page number, on every document regardless of type.
-        section = doc.sections[0]
+        # Footer: centered page number — but not on page 1. Page 1 is
+        # always the title page for policy documents (or the only page
+        # for a short template), and a page number there reads oddly next
+        # to a title panel with no visible page content yet. Templates
+        # that run past one page still get numbered from their actual
+        # page 2 onward, same as policies.
+        section.different_first_page_header_footer = True
+        section.first_page_footer.is_linked_to_previous = False
+        section.first_page_footer.paragraphs[0].text = ""
+
         section.footer.is_linked_to_previous = False
         footer_para = section.footer.paragraphs[0]
         footer_para.alignment = 1  # center
@@ -171,12 +223,21 @@ def main():
         r_element.append(fld_end)
 
         # Header: logo, top-left, small, on every page of every document.
-        header = section.header
-        header.is_linked_to_previous = False
-        header_para = header.paragraphs[0]
-        header_para.alignment = 0  # left
-        run = header_para.add_run()
-        run.add_picture(str(LOGO_PNG), height=Cm(0.5))
+        # Defined for BOTH the first page and the default (2+) case, even
+        # though the content is identical — tracked down via isolated
+        # testing that LibreOffice's title-page handling gets confused
+        # when a default header exists without a matching first-page
+        # header alongside a first-page footer: it silently ignores the
+        # first-page *footer* distinction too (the page number leaked
+        # onto page 1 even though the XML was structurally correct).
+        # Defining both symmetrically, even when they render the same
+        # logo, avoids that asymmetric-reference bug entirely.
+        for header_obj in (section.first_page_header, section.header):
+            header_obj.is_linked_to_previous = False
+            header_para = header_obj.paragraphs[0]
+            header_para.alignment = 0  # left
+            run = header_para.add_run()
+            run.add_picture(str(LOGO_PNG), height=Cm(0.5))
 
         # Pandoc's own default reference.docx body is just a swatch of
         # literal style-name placeholders ("Heading 1", "Body Text.", ...)
