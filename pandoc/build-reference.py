@@ -17,7 +17,9 @@ from docx.oxml import OxmlElement
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 LOGO_PNG = REPO_ROOT / "logo" / "tenx-logo-header.png"
-OUTPUT = Path(__file__).resolve().parent / "reference.docx"
+PANDOC_DIR = Path(__file__).resolve().parent
+PREVIEW_CONTENT = PANDOC_DIR / "preview-content.md"
+OUTPUT = PANDOC_DIR / "reference.docx"
 
 ACCENT = RGBColor(0xA8, 0x55, 0xF7)  # colors.md: Accent (violet)
 GRAY = RGBColor(0x6B, 0x6B, 0x6B)    # colors.md: Gray — mid
@@ -95,7 +97,25 @@ def main():
         run = header_para.add_run()
         run.add_picture(str(LOGO_PNG), height=Cm(0.5))
 
-        doc.save(str(OUTPUT))
+        # Pandoc's own default reference.docx body is just a swatch of
+        # literal style-name placeholders ("Heading 1", "Body Text.", ...)
+        # — useless for judging what a real document actually looks like.
+        # Rendering a realistic preview document through this styled base
+        # (via --reference-doc) bakes real, meaningful demo content into
+        # the final reference.docx while keeping every style, the header
+        # logo, and the footer page-number field intact — pandoc copies
+        # those through unchanged from whatever --reference-doc it's given.
+        styled_base_path = Path(tmp) / "styled-base.docx"
+        doc.save(str(styled_base_path))
+        subprocess.run(
+            [
+                "pandoc", str(PREVIEW_CONTENT),
+                f"--reference-doc={styled_base_path}",
+                "--toc",
+                "-o", str(OUTPUT),
+            ],
+            check=True,
+        )
         print(f"saved {OUTPUT}")
 
 
