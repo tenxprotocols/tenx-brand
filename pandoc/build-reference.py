@@ -48,6 +48,15 @@ def set_style_font_color(doc, style_name, color=None, bold=None, size=None):
         rpr.append(rFonts)
     for attr in ('w:ascii', 'w:hAnsi', 'w:eastAsia', 'w:cs'):
         rFonts.set(qn(attr), FONT)
+    # Pandoc's default styles carry theme-font attributes (w:asciiTheme etc.)
+    # on the same rFonts element, and per ECMA-376 §17.3.2.26 theme
+    # attributes OVERRIDE the literal ones when both are present — leaving
+    # them in place means the style silently renders in the document theme's
+    # font (Aptos Display in Pandoc 3.x), not Calibri. Strip them so the
+    # literal values actually win.
+    for attr in ('w:asciiTheme', 'w:hAnsiTheme', 'w:eastAsiaTheme', 'w:cstheme'):
+        if rFonts.get(qn(attr)) is not None:
+            del rFonts.attrib[qn(attr)]
     if color is not None:
         style.font.color.rgb = color
     if bold is not None:
@@ -114,6 +123,11 @@ def style_meta_line(doc, style_name, size, text_color, space_before=Pt(0), space
     pPr.append(ind)
     style.font.color.rgb = text_color
     style.font.size = size
+    # Title is bold (shade_title_style sets it), and Author/Date inherit
+    # that through basedOn — same inheritance hazard as the shading/indent
+    # above. Override explicitly so the metadata reads as plain gray text,
+    # not bold.
+    style.font.bold = False
     style.paragraph_format.space_before = space_before
     style.paragraph_format.space_after = space_after
 
@@ -145,6 +159,14 @@ def main():
         set_style_font_color(doc, 'Heading 2', color=ACCENT, bold=True, size=Pt(14))
         set_style_font_color(doc, 'Heading 3', color=ACCENT, bold=True, size=Pt(12))
         set_style_font_color(doc, 'TOC Heading', color=ACCENT, bold=True, size=Pt(18))
+        # Title/Author/Date need the same Calibri treatment: shade_title_style
+        # and style_meta_line set color/size/shading but never touch the font
+        # name, so without these calls the three title-page styles keep ONLY
+        # Pandoc's theme-font attributes and render in the theme font instead
+        # of Calibri. Color/size/bold for these are set below.
+        set_style_font_color(doc, 'Title')
+        set_style_font_color(doc, 'Author')
+        set_style_font_color(doc, 'Date')
 
         # Title: a colored panel, inset within the margins with real
         # padding on every side (see shade_title_style's docstring for why
