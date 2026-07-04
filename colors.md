@@ -23,6 +23,7 @@ brand guideline — treat as a placeholder until confirmed or replaced.
 | Name | Hex | Derivation | Suggested usage |
 |---|---|---|---|
 | Accent — shade (dark) | `#6609BE` | Same hue/sat, L reduced to 60% of base | Hover/active states, secondary emphasis, dark-mode accent |
+| Masthead (deep violet) | `#3D1A5B` | Hand-tuned deep violet in the accent's hue family (picked visually, not computed) | Title-panel (masthead) background on policy title pages — the shaded box behind the white document title in `pandoc/build-reference.py` |
 | Accent — complement | `#A4F755` (lime-green) | Hue +180° | Use sparingly if at all — a true color-wheel complement to a vivid violet reads as jarring in text-heavy documents. Reserve for rare status indicators (e.g. an "Active" chip) rather than structural document elements (headings, borders, footers). |
 
 ## Neutral grays (practical, not computed)
