@@ -1,10 +1,19 @@
 #!/usr/bin/env python3
-"""Rebuild reference.docx from TenX brand colors/fonts/logo.
+"""Rebuild reference.docx and reference-report.docx from TenX brand
+colors/fonts/logo.
 
-Run this whenever colors.md, typography.md, or the logo change — it
-regenerates pandoc/reference.docx, the single style template both
-tenx-doc-templates' and tenx-documents' sync pipelines pass to Pandoc via
---reference-doc. Requires: pandoc, python-docx (`pip install python-docx`).
+Run this whenever colors.md, typography.md, or the logo change. Produces
+two Pandoc --reference-doc templates, sharing the same fonts/headings/
+footer machinery but with two different title-page treatments:
+
+  - reference.docx — policies and templates: a restrained, typographic
+    title page (see build_policy_reference()).
+  - reference-report.docx — reports (quarterly business reports and
+    similar): a graphic cover page (see build_report_reference()) — the
+    "annual report / pitch deck" genre the policy title page deliberately
+    avoids (see the design-history comment below).
+
+Requires: pandoc, python-docx (`pip install python-docx`).
 """
 import subprocess
 import tempfile
@@ -16,23 +25,30 @@ from docx.oxml.ns import qn
 from docx.oxml import OxmlElement
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
-# Stacked lockup (icon above wordmark), not the horizontal one — per direct
-# feedback that the mark should read icon-over-text on the title page, not
-# icon-beside-text. 512px is far more resolution than the ~0.7in print size
-# below needs, but logo/build-logos.py's smallest common size (128px) would
-# be visibly soft at that size, so round up rather than regenerate a
-# one-off in-between size just for this.
-LOGO_PNG = REPO_ROOT / "logo" / "png" / "lockup-stacked-black-512.png"
 PANDOC_DIR = Path(__file__).resolve().parent
-PREVIEW_CONTENT = PANDOC_DIR / "preview-content.md"
-OUTPUT = PANDOC_DIR / "reference.docx"
+PREVIEW_CONTENT_POLICY = PANDOC_DIR / "preview-content.md"
+PREVIEW_CONTENT_REPORT = PANDOC_DIR / "preview-content-report.md"
+POLICY_OUTPUT = PANDOC_DIR / "reference.docx"
+REPORT_OUTPUT = PANDOC_DIR / "reference-report.docx"
+
+# Stacked lockup (icon above wordmark), not the horizontal one — per direct
+# feedback that the mark should read icon-over-text, not icon-beside-text.
+# 512px is far more resolution than either print size below needs, but
+# logo/build-logos.py's smallest common size (128px) would be visibly soft,
+# so round up rather than generate one-off in-between sizes.
+LOGO_BLACK = REPO_ROOT / "logo" / "png" / "lockup-stacked-black-512.png"
+LOGO_WHITE = REPO_ROOT / "logo" / "png" / "lockup-stacked-white-512.png"
 
 ACCENT = RGBColor(0xA8, 0x55, 0xF7)   # colors.md: Accent (violet)
 GRAY = RGBColor(0x6B, 0x6B, 0x6B)     # colors.md: Gray — mid
+WHITE = RGBColor(0xFF, 0xFF, 0xFF)
+COVER_HEX = "3D1A5B"                  # colors.md: MASTHEAD_HEX — deep violet, reused here as the report cover's background
 FONT = "Calibri"                      # typography.md
-LOGO_HEIGHT = Cm(1.5)                 # ~3x the old 0.5cm header mark — see header block below
 
-# Title-page design history, oldest first:
+LOGO_HEIGHT = Cm(1.5)        # restrained header size — every policy/template page, and a report's page 2+
+COVER_LOGO_HEIGHT = Cm(3.2)  # report cover only (page 1) — large and centered, the graphic focal point
+
+# Title-page design history (reference.docx — policies/templates), oldest first:
 # 1. A curve+badge cover graphic (a large violet sweep + circular logo
 #    badge) was built and rendered, then dropped after review — real SOC 2
 #    / ISO 27001 policy documents converge on restrained, typographic title
@@ -46,8 +62,14 @@ LOGO_HEIGHT = Cm(1.5)                 # ~3x the old 0.5cm header mark — see he
 #    background color on Title, and the TenX logo moved from a small
 #    top-left header mark to a large, centered lockup directly above the
 #    title, so logo + title + Author/Date now read as one cohesive,
-#    centered unit instead of a colored box with a corner logo. See the
-#    header block and style_title() below for how that's built.
+#    centered unit instead of a colored box with a corner logo.
+#
+# That graphic-cover genre wasn't wrong for every document type, just wrong
+# for restrained policy documents — reports (quarterly business reports and
+# similar) are exactly the genre it fits. build_report_reference() below
+# revives the same shaded-panel technique from step 2, scaled up, using
+# COVER_HEX and the white logo variant so the mark reads against the panel
+# instead of against the page.
 
 
 def set_style_font_color(doc, style_name, color=None, bold=None, size=None):
@@ -77,19 +99,30 @@ def set_style_font_color(doc, style_name, color=None, bold=None, size=None):
         style.font.size = size
 
 
-def style_title(doc, size, text_color, bold=True, space_before=Pt(18), space_after=Pt(16)):
-    """Plain Title style: no shading, no box, no indent — the logo above
-    it (see the header block in main()) now carries the visual weight
-    that a colored panel used to. Pandoc's default Title is already
-    center-aligned, so centering doesn't need to be set here.
+def style_title(doc, size, text_color, bold=True, space_before=Pt(18), space_after=Pt(16),
+                 shading_hex=None, pad_h_twips=0):
+    """Title style. With shading_hex=None (policies/templates): plain
+    colored text, no box — the logo above it in the header carries the
+    visual weight instead (see build_policy_reference()). With
+    shading_hex set (reports): a colored panel, same mechanic as the
+    dropped policy masthead band — paragraph shading covers the
+    paragraph's own space_before/space_after too, so those act as the
+    panel's internal top/bottom padding, not just inter-paragraph gaps.
 
-    space_before is the only lever controlling the gap between the
-    header logo and this text (top_margin/header_distance set the floor;
-    this adds a touch more breathing room on top of that) — kept small so
-    the title reads as directly under the logo, one cohesive block, not a
-    separate element. space_after is the gap down to Author, which does
-    most of the remaining separation via its own space_before."""
+    Pandoc's default Title is already center-aligned, so centering
+    doesn't need to be set here."""
     style = doc.styles['Title']
+    pPr = style.element.get_or_add_pPr()
+    if shading_hex is not None:
+        shd = OxmlElement('w:shd')
+        shd.set(qn('w:val'), 'clear')
+        shd.set(qn('w:fill'), shading_hex)
+        pPr.append(shd)
+    if pad_h_twips:
+        ind = OxmlElement('w:ind')
+        ind.set(qn('w:left'), str(pad_h_twips))
+        ind.set(qn('w:right'), str(pad_h_twips))
+        pPr.append(ind)
     style.font.color.rgb = text_color
     style.font.size = size
     style.font.bold = bold
@@ -99,13 +132,14 @@ def style_title(doc, size, text_color, bold=True, space_before=Pt(18), space_aft
 
 
 def style_meta_line(doc, style_name, size, text_color, space_before=Pt(0), space_after=Pt(2)):
-    """Author/Date: plain gray text below the title. Safe to leave
-    shading/indent/bold unset here now that Title itself carries none of
-    those (Author/Date are basedOn Title in Pandoc's default
-    reference.docx, so previously — when Title was a colored, indented,
-    bold panel — this function had to explicitly override all three to
-    avoid inheriting them; with Title plain, there's nothing left to
-    override)."""
+    """Author/Date: plain text below the title, color/size/weight only.
+    Shading/indent are deliberately left unset here — Author/Date are
+    basedOn Title in Pandoc's default reference.docx, so whatever Title
+    carries (nothing, for policies; COVER_HEX shading, for reports) is
+    inherited automatically through that cascade. For the report cover,
+    that's exactly what's wanted: Author/Date continue the same colored
+    panel Title started, using their own space_before/space_after as
+    padding the same way Title's does."""
     style = doc.styles[style_name]
     style.font.color.rgb = text_color
     style.font.size = size
@@ -114,182 +148,228 @@ def style_meta_line(doc, style_name, size, text_color, space_before=Pt(0), space
     style.paragraph_format.space_after = space_after
 
 
-def main():
+def set_header(header_obj, logo_png, logo_height, alignment=1, shading_hex=None,
+                space_before=Pt(0), space_after=Pt(0)):
+    header_obj.is_linked_to_previous = False
+    para = header_obj.paragraphs[0]
+    if shading_hex is not None:
+        pPr = para._p.get_or_add_pPr()
+        shd = OxmlElement('w:shd')
+        shd.set(qn('w:val'), 'clear')
+        shd.set(qn('w:fill'), shading_hex)
+        pPr.append(shd)
+    para.alignment = alignment
+    para.paragraph_format.space_before = space_before
+    para.paragraph_format.space_after = space_after
+    run = para.add_run()
+    run.add_picture(str(logo_png), height=logo_height)
+
+
+def add_footer_page_field(section):
+    """Centered page number — but not on page 1 (always the title/cover
+    page, or the only page for a short template).
+
+    The XML this produces is spec-correct (titlePg set, a distinct empty
+    w:type="first" footer, a separate w:type="default" footer carrying
+    the PAGE field) and Word/Google Docs honor it exactly as intended.
+    LibreOffice 26.2 headless does not: verified with an isolated minimal
+    docx that as soon as ANY header is present — even one identically
+    defined for first-page and default, with no other asymmetry at all —
+    LO leaks the default footer's page number onto page 1 regardless.
+    Same category of LO-headless-only limitation as the TOC-field-
+    population issue noted below (a rendering tool gap, not a document
+    defect) — Word and Google Docs are the real targets."""
+    section.different_first_page_header_footer = True
+    section.first_page_footer.is_linked_to_previous = False
+    section.first_page_footer.paragraphs[0].text = ""
+
+    section.footer.is_linked_to_previous = False
+    footer_para = section.footer.paragraphs[0]
+    footer_para.alignment = 1  # center
+    footer_para.text = ""
+    run = footer_para.add_run()
+    run.font.name = FONT
+    run.font.size = Pt(9)
+    run.font.color.rgb = GRAY
+    fld_begin = OxmlElement('w:fldChar')
+    fld_begin.set(qn('w:fldCharType'), 'begin')
+    instr = OxmlElement('w:instrText')
+    instr.set(qn('xml:space'), 'preserve')
+    instr.text = "PAGE"
+    fld_end = OxmlElement('w:fldChar')
+    fld_end.set(qn('w:fldCharType'), 'end')
+    r_element = run._r
+    r_element.append(fld_begin)
+    r_element.append(instr)
+    r_element.append(fld_end)
+
+
+def base_document():
+    """Build the shared base every reference doc starts from: Pandoc's
+    own default reference.docx, with page geometry, fonts/heading colors,
+    the page-number footer, and the update-fields flag applied. Each
+    variant then layers its own title-page/header treatment and margins
+    on top of this."""
+    base_path = Path(tempfile.mkdtemp()) / "default-reference.docx"
+    subprocess.run(
+        ["pandoc", "-o", str(base_path), "--print-default-data-file", "reference.docx"],
+        check=True,
+    )
+    doc = Document(str(base_path))
+
+    # Pandoc's default reference.docx doesn't set page size/margins
+    # explicitly (python-docx reads them back as None) — pin them so the
+    # fixed vertical-positioning math each variant does is against known
+    # numbers, not whatever the rendering application happens to default
+    # to. top_margin/header_distance are set per-variant, not here — each
+    # title-page treatment needs a different amount of header room.
+    section = doc.sections[0]
+    section.page_width = Inches(8.5)
+    section.page_height = Inches(11)
+    section.bottom_margin = Inches(1)
+    section.left_margin = Inches(1)
+    section.right_margin = Inches(1)
+
+    set_style_font_color(doc, 'Normal')
+    set_style_font_color(doc, 'Heading 1', color=ACCENT, bold=True, size=Pt(18))
+    set_style_font_color(doc, 'Heading 2', color=ACCENT, bold=True, size=Pt(14))
+    set_style_font_color(doc, 'Heading 3', color=ACCENT, bold=True, size=Pt(12))
+    set_style_font_color(doc, 'TOC Heading', color=ACCENT, bold=True, size=Pt(18))
+    # Title/Author/Date need the same Calibri treatment: style_title and
+    # style_meta_line set color/size/shading but never touch the font
+    # name, so without these calls the three title-page styles keep ONLY
+    # Pandoc's theme-font attributes and render in the theme font instead
+    # of Calibri.
+    set_style_font_color(doc, 'Title')
+    set_style_font_color(doc, 'Author')
+    set_style_font_color(doc, 'Date')
+
+    # Page break before TOC Heading — separates the title/cover page from
+    # the TOC page. Policies and reports pass --toc; templates don't, so
+    # this only ever fires for the other two.
+    doc.styles['TOC Heading'].paragraph_format.page_break_before = True
+
+    add_footer_page_field(section)
+
+    # Tell any compliant consumer (Word, in particular) to refresh all
+    # fields — including the TOC field — the moment the document is
+    # opened, so a reader never has to manually press F9. This does NOT
+    # fix LibreOffice's headless PDF export, which was confirmed (by
+    # testing both this flag and an export-filter option) to leave the
+    # TOC field unpopulated regardless — a rendering-tool limitation, not
+    # a document defect. Word honors this flag per spec, and Google Docs
+    # independently converts the field to its own live, auto-refreshing
+    # TOC object at import time either way.
+    update_fields = OxmlElement('w:updateFields')
+    update_fields.set(qn('w:val'), 'true')
+    doc.settings.element.insert(0, update_fields)
+
+    return doc, section
+
+
+def render(doc, preview_content, output):
     with tempfile.TemporaryDirectory() as tmp:
-        base_path = Path(tmp) / "default-reference.docx"
-        subprocess.run(
-            ["pandoc", "-o", str(base_path), "--print-default-data-file", "reference.docx"],
-            check=True,
-        )
-        doc = Document(str(base_path))
-
-        # Pandoc's default reference.docx doesn't set page size/margins
-        # explicitly (python-docx reads them back as None) — pin them so
-        # the fixed vertical-positioning math below (centering the title,
-        # pinning the metadata near the bottom) is against known numbers,
-        # not whatever the rendering application happens to default to.
-        section = doc.sections[0]
-        section.page_width = Inches(8.5)
-        section.page_height = Inches(11)
-        # top_margin is section-wide — it also sets where body text starts
-        # on every page after the title page (TOC, then real content), not
-        # just page 1. It's sized to fit header_distance + the now-larger
-        # logo (see the header block below) plus a small buffer, and kept
-        # as tight as that requires rather than pushed further down: doing
-        # the latter to visually center the logo+title block on the title
-        # page would waste that same extra space on every subsequent page.
-        # Genuine vertical centering of a header-anchored element is out of
-        # reach for that reason — same kind of hard OOXML wall as the
-        # earlier rounded-corners case — so this settles for "logo sits
-        # directly above the title as one tight, cohesive unit in the upper
-        # part of the page" rather than "block is dead-center."
-        section.header_distance = Inches(0.6)
-        section.top_margin = Inches(1.3)
-        section.bottom_margin = Inches(1)
-        section.left_margin = Inches(1)
-        section.right_margin = Inches(1)
-
-        set_style_font_color(doc, 'Normal')
-        set_style_font_color(doc, 'Heading 1', color=ACCENT, bold=True, size=Pt(18))
-        set_style_font_color(doc, 'Heading 2', color=ACCENT, bold=True, size=Pt(14))
-        set_style_font_color(doc, 'Heading 3', color=ACCENT, bold=True, size=Pt(12))
-        set_style_font_color(doc, 'TOC Heading', color=ACCENT, bold=True, size=Pt(18))
-        # Title/Author/Date need the same Calibri treatment: shade_title_style
-        # and style_meta_line set color/size/shading but never touch the font
-        # name, so without these calls the three title-page styles keep ONLY
-        # Pandoc's theme-font attributes and render in the theme font instead
-        # of Calibri. Color/size/bold for these are set below.
-        set_style_font_color(doc, 'Title')
-        set_style_font_color(doc, 'Author')
-        set_style_font_color(doc, 'Date')
-
-        # Title: plain colored text (no panel — see the design-history
-        # comment near ACCENT/LOGO_HEIGHT above), sitting directly under
-        # the large centered logo in the header. Author/Date (company
-        # name, version/confidentiality/date string) follow below.
-        #
-        # Vertical layout of the title page is a fixed-spacing
-        # approximation, not true centering/bottom-anchoring — Pandoc
-        # generates Title/Author/Date as plain top-down-flowing
-        # paragraphs, and there's no page-relative vertical anchor
-        # available at the paragraph-style level (that would need a
-        # full-page table cell with vAlign, which would have to wrap
-        # content Pandoc itself generates — not reachable via
-        # --reference-doc styling).
-        #
-        # These numbers still need to survive a 2-line WRAPPED title
-        # (tested: "Remote Access and Bring-Your-Own-Device (BYOD) Security
-        # Policy") without the metadata paragraph silently overflowing onto
-        # a real page 2 (confirmed failure mode of an earlier version of
-        # these numbers — shifts every subsequent page number by one).
-        style_title(doc, size=Pt(24), text_color=ACCENT, space_before=Pt(18), space_after=Pt(16))
-        style_meta_line(
-            doc, 'Author', size=Pt(11), text_color=GRAY,
-            space_before=Pt(100), space_after=Pt(2),
-        )
-        style_meta_line(
-            doc, 'Date', size=Pt(10), text_color=GRAY,
-            space_after=Pt(0),
-        )
-
-        # Page break before TOC Heading — separates the title page from the
-        # TOC page. Policies pass --toc; templates don't, so this only ever
-        # fires for policy documents.
-        doc.styles['TOC Heading'].paragraph_format.page_break_before = True
-
-        # Footer: centered page number — but not on page 1. Page 1 is
-        # always the title page for policy documents (or the only page
-        # for a short template), and a page number there reads oddly with
-        # no visible page content yet. Templates that run past one page
-        # still get numbered from their actual page 2 onward, same as
-        # policies.
-        #
-        # The XML this produces is spec-correct (titlePg set, a distinct
-        # empty w:type="first" footer, a separate w:type="default" footer
-        # carrying the PAGE field) and Word/Google Docs honor it exactly
-        # as intended. LibreOffice 26.2 headless does not: verified with an
-        # isolated minimal docx that as soon as ANY header is present —
-        # even one identically defined for first-page and default, with no
-        # other asymmetry at all — LO leaks the default footer's page
-        # number onto page 1 regardless. This reproduces with or without
-        # the brand header below, so it isn't something introduced by this
-        # design; it's the same category of LO-headless-only limitation as
-        # the TOC-field-population issue noted further down (a rendering
-        # tool gap, not a document defect) and isn't worth chasing further
-        # here — Word and Google Docs are the real targets.
-        section.different_first_page_header_footer = True
-        section.first_page_footer.is_linked_to_previous = False
-        section.first_page_footer.paragraphs[0].text = ""
-
-        section.footer.is_linked_to_previous = False
-        footer_para = section.footer.paragraphs[0]
-        footer_para.alignment = 1  # center
-        footer_para.text = ""
-        run = footer_para.add_run()
-        run.font.name = FONT
-        run.font.size = Pt(9)
-        run.font.color.rgb = GRAY
-        fld_begin = OxmlElement('w:fldChar')
-        fld_begin.set(qn('w:fldCharType'), 'begin')
-        instr = OxmlElement('w:instrText')
-        instr.set(qn('xml:space'), 'preserve')
-        instr.text = "PAGE"
-        fld_end = OxmlElement('w:fldChar')
-        fld_end.set(qn('w:fldCharType'), 'end')
-        r_element = run._r
-        r_element.append(fld_begin)
-        r_element.append(instr)
-        r_element.append(fld_end)
-
-        # Header: logo, centered, large enough to anchor the title page
-        # (see LOGO_HEIGHT/style_title above — it sits directly above
-        # Title as one block). Defined explicitly for BOTH first-page and
-        # default: with titlePg set (see the footer comment above), an
-        # undefined first-page header renders BLANK per spec rather than
-        # inheriting the default — and the title page is exactly where we
-        # want the logo, so it needs its own explicit reference. Content
-        # happens to be identical on every page here, which also just
-        # reads as a reasonable consistent brand presence throughout.
-        for header_obj in (section.first_page_header, section.header):
-            header_obj.is_linked_to_previous = False
-            header_para = header_obj.paragraphs[0]
-            header_para.alignment = 1  # center
-            run = header_para.add_run()
-            run.add_picture(str(LOGO_PNG), height=LOGO_HEIGHT)
-
-        # Tell any compliant consumer (Word, in particular) to refresh all
-        # fields — including the policy TOC field — the moment the
-        # document is opened, so a reader never has to manually press F9.
-        # This does NOT fix LibreOffice's headless PDF export, which was
-        # confirmed (by testing both this flag and an export-filter option)
-        # to leave the TOC field unpopulated regardless — a rendering-tool
-        # limitation, not a document defect. Word honors this flag per
-        # spec, and Google Docs independently converts the field to its
-        # own live, auto-refreshing TOC object at import time either way.
-        update_fields = OxmlElement('w:updateFields')
-        update_fields.set(qn('w:val'), 'true')
-        doc.settings.element.insert(0, update_fields)
-
         # Pandoc's own default reference.docx body is just a swatch of
         # literal style-name placeholders ("Heading 1", "Body Text.", ...)
         # — useless for judging what a real document actually looks like.
         # Rendering a realistic preview document through this styled base
         # (via --reference-doc) bakes real, meaningful demo content into
-        # the final reference.docx while keeping every style, the header
-        # logo, and the footer page-number field intact — pandoc copies
-        # those through unchanged from whatever --reference-doc it's given.
+        # the final reference doc while keeping every style, header, and
+        # footer intact — pandoc copies those through unchanged from
+        # whatever --reference-doc it's given.
         styled_base_path = Path(tmp) / "styled-base.docx"
         doc.save(str(styled_base_path))
         subprocess.run(
             [
-                "pandoc", str(PREVIEW_CONTENT),
+                "pandoc", str(preview_content),
                 f"--reference-doc={styled_base_path}",
                 "--toc",
-                "-o", str(OUTPUT),
+                "-o", str(output),
             ],
             check=True,
         )
-        print(f"saved {OUTPUT}")
+        print(f"saved {output}")
+
+
+def build_policy_reference():
+    """Policies and templates: restrained, typographic title page. Logo,
+    centered and large enough to anchor the page, sits directly above
+    plain colored Title text — no panel — so logo+title+Author/Date read
+    as one cohesive block. Identical header on every page (not just the
+    title page): with titlePg set (see add_footer_page_field), an
+    undefined first-page header renders BLANK per spec rather than
+    inheriting the default, and the title page is exactly where the logo
+    needs to be — so it needs its own explicit reference regardless; a
+    consistent brand mark on every page is also just a reasonable look on
+    its own."""
+    doc, section = base_document()
+
+    # top_margin is section-wide — it also sets where body text starts on
+    # every page after the title page (TOC, then real content), not just
+    # page 1. Sized to fit header_distance + LOGO_HEIGHT plus a small
+    # buffer, and kept as tight as that requires rather than pushed
+    # further down: doing the latter to visually center the logo+title
+    # block on the title page would waste that same extra space on every
+    # subsequent page. Genuine vertical centering of a header-anchored
+    # element is out of reach for that reason — same kind of hard OOXML
+    # wall as rounded panel corners — so this settles for "logo sits
+    # directly above the title as one tight, cohesive unit in the upper
+    # part of the page" rather than "block is dead-center."
+    section.header_distance = Inches(0.6)
+    section.top_margin = Inches(1.3)
+
+    style_title(doc, size=Pt(24), text_color=ACCENT, space_before=Pt(18), space_after=Pt(16))
+    style_meta_line(doc, 'Author', size=Pt(11), text_color=GRAY, space_before=Pt(100), space_after=Pt(2))
+    style_meta_line(doc, 'Date', size=Pt(10), text_color=GRAY, space_after=Pt(0))
+
+    for header_obj in (section.first_page_header, section.header):
+        set_header(header_obj, LOGO_BLACK, LOGO_HEIGHT, alignment=1)
+
+    render(doc, PREVIEW_CONTENT_POLICY, POLICY_OUTPUT)
+
+
+def build_report_reference():
+    """Reports (quarterly business reports and similar): a graphic cover
+    page. The header (page 1 only) and Title/Author/Date are all shaded
+    the same COVER_HEX, with no unshaded gap between the header's shaded
+    box and Title's — see style_title's docstring on why paragraph
+    shading covering space_before/space_after makes that a matter of
+    sizing, not a separate mechanism. Interior pages (2+) fall back to
+    the same small black header used by policies/templates — the graphic
+    treatment is deliberately cover-only, not carried through the whole
+    report."""
+    doc, section = base_document()
+
+    # header_distance + the cover header's own space_before/logo/space_after
+    # need to land on top_margin with (ideally) zero gap, or the shaded
+    # header box and shaded Title box show a visible unshaded seam between
+    # them. Tuned empirically against the rendered preview, same as every
+    # other spacing constant in this file — not a closed-form calculation.
+    section.header_distance = Inches(0.4)
+    section.top_margin = Inches(2.85)
+
+    style_title(
+        doc, size=Pt(34), text_color=WHITE, space_before=Pt(0), space_after=Pt(20),
+        shading_hex=COVER_HEX, pad_h_twips=360,
+    )
+    style_meta_line(doc, 'Author', size=Pt(13), text_color=WHITE, space_before=Pt(0), space_after=Pt(4))
+    # Date is the last paragraph in the shaded panel — its space_after is
+    # the panel's bottom padding, same role Title's space_after/space_before
+    # play above.
+    style_meta_line(doc, 'Date', size=Pt(11), text_color=RGBColor(0xD8, 0xC9, 0xEE), space_after=Pt(48))
+
+    set_header(
+        section.first_page_header, LOGO_WHITE, COVER_LOGO_HEIGHT, alignment=1,
+        shading_hex=COVER_HEX, space_before=Pt(40), space_after=Pt(24),
+    )
+    set_header(section.header, LOGO_BLACK, LOGO_HEIGHT, alignment=1)
+
+    render(doc, PREVIEW_CONTENT_REPORT, REPORT_OUTPUT)
+
+
+def main():
+    build_policy_reference()
+    build_report_reference()
 
 
 if __name__ == "__main__":
