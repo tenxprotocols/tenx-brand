@@ -20,11 +20,10 @@ that's defined — this repo isn't meant to be reused for that entity.
 
 ## Logo
 
-`logo/build-logos.py` regenerates every variant from the original brand
-mark's path data (hardcoded in the script, extracted once from the source
-SVG pulled from tenx.inc). Run it whenever the mark itself changes — it
-is not derived from any file still in this directory, so there's nothing
-else to edit first.
+`logo/build-logos.py` regenerates every variant from `logo/source/icon.svg`
+and `logo/source/wordmark.svg` — the original brand mark's path data,
+extracted once from the source SVG pulled from tenx.inc. Edit those two
+files (not the script) if the mark itself ever changes.
 
 Four compositions, each in black and white:
 

@@ -1,0 +1,17 @@
+<!--
+  Source path data for the geometric icon mark, extracted once from the
+  original tenx-logo.svg (pulled from tenx.inc). This is the source of
+  truth build-logos.py reads from — edit here, not in the script, if the
+  mark itself ever changes.
+
+  viewBox is the exact bounding box of the paths below, derived via a
+  render-at-high-DPI-then-trim pass (ImageMagick `-trim`) rather than by
+  eye — some paths use cubic Beziers, so hand-measured coordinates would
+  be unreliable. Deliberately unfilled: build-logos.py wraps this content
+  in a <g fill="..."> per color/composition it generates.
+-->
+<svg viewBox="0 0 30.13 30.13" xmlns="http://www.w3.org/2000/svg">
+<path d="M22.2679 30H6.87012L14.5684 22.3006L22.2679 30Z"/>
+<path d="M18.4356 4.9061L25.2009 11.6703L30 6.87012V24.2015L5.79853 0H23.3417L18.4356 4.9061Z"/>
+<path d="M7.80424 15.5364L0 23.3417V7.73212L7.80424 15.5364Z"/>
+</svg>
