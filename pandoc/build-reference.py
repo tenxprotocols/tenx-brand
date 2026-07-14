@@ -16,26 +16,38 @@ from docx.oxml.ns import qn
 from docx.oxml import OxmlElement
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
-LOGO_PNG = REPO_ROOT / "logo" / "tenx-logo-header.png"
+# Stacked lockup (icon above wordmark), not the horizontal one — per direct
+# feedback that the mark should read icon-over-text on the title page, not
+# icon-beside-text. 512px is far more resolution than the ~0.7in print size
+# below needs, but logo/build-logos.py's smallest common size (128px) would
+# be visibly soft at that size, so round up rather than regenerate a
+# one-off in-between size just for this.
+LOGO_PNG = REPO_ROOT / "logo" / "png" / "lockup-stacked-black-512.png"
 PANDOC_DIR = Path(__file__).resolve().parent
 PREVIEW_CONTENT = PANDOC_DIR / "preview-content.md"
 OUTPUT = PANDOC_DIR / "reference.docx"
 
 ACCENT = RGBColor(0xA8, 0x55, 0xF7)   # colors.md: Accent (violet)
-MASTHEAD_HEX = "3D1A5B"               # deep violet, darker than the accent, for the masthead band
 GRAY = RGBColor(0x6B, 0x6B, 0x6B)     # colors.md: Gray — mid
 FONT = "Calibri"                      # typography.md
+LOGO_HEIGHT = Cm(1.5)                 # ~3x the old 0.5cm header mark — see header block below
 
-# Deliberately dropped after review: a curve+badge cover graphic (a large
-# violet sweep + circular logo badge) was built and rendered, but real SOC 2
-# / ISO 27001 policy documents converge on restrained, typographic title
-# pages — no illustrative cover art (that's an annual-report/pitch-deck
-# convention, a different genre). Illustrative shapes at fixed positions
-# also can't adapt to a variable-length title without either colliding with
-# the text or requiring per-document layout — a real robustness gap for a
-# reference template meant to work for every policy name. The masthead band
-# below stays text-only for exactly that reason: paragraph shading grows
-# with wrapped text automatically, a fixed shape does not.
+# Title-page design history, oldest first:
+# 1. A curve+badge cover graphic (a large violet sweep + circular logo
+#    badge) was built and rendered, then dropped after review — real SOC 2
+#    / ISO 27001 policy documents converge on restrained, typographic title
+#    pages, and illustrative shapes at fixed positions can't adapt to a
+#    variable-length title without either colliding with the text or
+#    requiring per-document layout.
+# 2. A shaded "masthead band" (Title as a colored panel, inset within the
+#    margins) replaced it — paragraph shading grows with wrapped text
+#    automatically, a fixed shape does not.
+# 3. The masthead band itself was later dropped per direct feedback: no
+#    background color on Title, and the TenX logo moved from a small
+#    top-left header mark to a large, centered lockup directly above the
+#    title, so logo + title + Author/Date now read as one cohesive,
+#    centered unit instead of a colored box with a corner logo. See the
+#    header block and style_title() below for how that's built.
 
 
 def set_style_font_color(doc, style_name, color=None, bold=None, size=None):
@@ -65,89 +77,41 @@ def set_style_font_color(doc, style_name, color=None, bold=None, size=None):
         style.font.size = size
 
 
-def shade_title_style(doc, size, text_color, bold=True, space_before=Pt(16), pad_bottom=Pt(24), pad_h_twips=320):
-    """Turn the Title style into a self-contained colored panel: shaded,
-    inset a bit further than the paragraph's own indent so text never
-    touches the box edge. Deliberately does NOT bleed past the page
-    margins — a paragraph's indent controls both the shading extent and
-    where its text starts (there's no way to make a shaded box wider than
-    its own text at the paragraph level), so a true edge-to-edge bleed
-    always drags the text uncomfortably close to the page edge too.
-    Staying within the margins keeps real breathing room on every side.
-    A long title wraps to multiple lines and the box grows to fit —
-    nothing to collide with. Only ever fires for policy-convention
-    documents; templates never trigger Pandoc's title-block path.
+def style_title(doc, size, text_color, bold=True, space_before=Pt(18), space_after=Pt(16)):
+    """Plain Title style: no shading, no box, no indent — the logo above
+    it (see the header block in main()) now carries the visual weight
+    that a colored panel used to. Pandoc's default Title is already
+    center-aligned, so centering doesn't need to be set here.
 
-    space_before does double duty: it's both the box's internal top
-    padding AND the page-positioning push used to center the title on
-    the page (there's only one `space_before` knob per paragraph — no
-    separate "padding" vs "position" concept at this level). pad_bottom
-    stays small and is purely internal box padding, since the large gap
-    down to Author/Date is controlled separately, on Author's own
-    space_before."""
+    space_before is the only lever controlling the gap between the
+    header logo and this text (top_margin/header_distance set the floor;
+    this adds a touch more breathing room on top of that) — kept small so
+    the title reads as directly under the logo, one cohesive block, not a
+    separate element. space_after is the gap down to Author, which does
+    most of the remaining separation via its own space_before."""
     style = doc.styles['Title']
-    pPr = style.element.get_or_add_pPr()
-    shd = OxmlElement('w:shd')
-    shd.set(qn('w:val'), 'clear')
-    shd.set(qn('w:fill'), MASTHEAD_HEX)
-    pPr.append(shd)
-    ind = OxmlElement('w:ind')
-    ind.set(qn('w:left'), str(pad_h_twips))
-    ind.set(qn('w:right'), str(pad_h_twips))
-    pPr.append(ind)
     style.font.color.rgb = text_color
     style.font.size = size
     style.font.bold = bold
     style.paragraph_format.space_before = space_before
-    style.paragraph_format.space_after = pad_bottom
+    style.paragraph_format.space_after = space_after
     style.paragraph_format.line_spacing = 1.15
 
 
-def style_meta_line(doc, style_name, size, text_color, space_before=Pt(0), space_after=Pt(2), top_border=False):
-    """Author/Date sit outside the colored title panel entirely — plain
-    text on the page background, per direct feedback that company name
-    and version info read better outside the block than crammed inside
-    it. Both styles are basedOn Title in Pandoc's default reference.docx,
-    so they inherit Title's shading/indent through the style cascade —
-    not setting anything here would silently leave them shaded. Override
-    both explicitly rather than relying on absence.
-
-    top_border adds a thin rule above the paragraph — used on Author (the
-    first metadata line) as a visual anchor between the title panel and
-    the metadata below it, since bringing the panel up to a tighter
-    upper-third position left the metadata block looking a little
-    disconnected on its own."""
+def style_meta_line(doc, style_name, size, text_color, space_before=Pt(0), space_after=Pt(2)):
+    """Author/Date: plain gray text below the title. Safe to leave
+    shading/indent/bold unset here now that Title itself carries none of
+    those (Author/Date are basedOn Title in Pandoc's default
+    reference.docx, so previously — when Title was a colored, indented,
+    bold panel — this function had to explicitly override all three to
+    avoid inheriting them; with Title plain, there's nothing left to
+    override)."""
     style = doc.styles[style_name]
-    pPr = style.element.get_or_add_pPr()
-    shd = OxmlElement('w:shd')
-    shd.set(qn('w:val'), 'clear')
-    shd.set(qn('w:fill'), 'auto')
-    pPr.append(shd)
-    ind = OxmlElement('w:ind')
-    ind.set(qn('w:left'), '0')
-    ind.set(qn('w:right'), '0')
-    pPr.append(ind)
     style.font.color.rgb = text_color
     style.font.size = size
-    # Title is bold (shade_title_style sets it), and Author/Date inherit
-    # that through basedOn — same inheritance hazard as the shading/indent
-    # above. Override explicitly so the metadata reads as plain gray text,
-    # not bold.
     style.font.bold = False
     style.paragraph_format.space_before = space_before
     style.paragraph_format.space_after = space_after
-    if top_border:
-        # OOXML paragraph borders (w:pBdr), like shading, are strictly
-        # straight lines — no corner-radius concept exists at this level,
-        # same constraint that rules out rounding the title panel itself.
-        pBdr = OxmlElement('w:pBdr')
-        top = OxmlElement('w:top')
-        top.set(qn('w:val'), 'single')
-        top.set(qn('w:sz'), '8')
-        top.set(qn('w:space'), '8')
-        top.set(qn('w:color'), MASTHEAD_HEX)
-        pBdr.append(top)
-        pPr.append(pBdr)
 
 
 def main():
@@ -167,7 +131,20 @@ def main():
         section = doc.sections[0]
         section.page_width = Inches(8.5)
         section.page_height = Inches(11)
-        section.top_margin = Inches(1)
+        # top_margin is section-wide — it also sets where body text starts
+        # on every page after the title page (TOC, then real content), not
+        # just page 1. It's sized to fit header_distance + the now-larger
+        # logo (see the header block below) plus a small buffer, and kept
+        # as tight as that requires rather than pushed further down: doing
+        # the latter to visually center the logo+title block on the title
+        # page would waste that same extra space on every subsequent page.
+        # Genuine vertical centering of a header-anchored element is out of
+        # reach for that reason — same kind of hard OOXML wall as the
+        # earlier rounded-corners case — so this settles for "logo sits
+        # directly above the title as one tight, cohesive unit in the upper
+        # part of the page" rather than "block is dead-center."
+        section.header_distance = Inches(0.6)
+        section.top_margin = Inches(1.3)
         section.bottom_margin = Inches(1)
         section.left_margin = Inches(1)
         section.right_margin = Inches(1)
@@ -186,12 +163,10 @@ def main():
         set_style_font_color(doc, 'Author')
         set_style_font_color(doc, 'Date')
 
-        # Title: a colored panel, inset within the margins with real
-        # padding on every side (see shade_title_style's docstring for why
-        # it doesn't bleed to the page edge). Author/Date (company name,
-        # version/confidentiality/date string) sit outside it as plain
-        # text — per direct feedback, metadata reads better outside the
-        # colored block than crammed inside it.
+        # Title: plain colored text (no panel — see the design-history
+        # comment near ACCENT/LOGO_HEIGHT above), sitting directly under
+        # the large centered logo in the header. Author/Date (company
+        # name, version/confidentiality/date string) follow below.
         #
         # Vertical layout of the title page is a fixed-spacing
         # approximation, not true centering/bottom-anchoring — Pandoc
@@ -207,19 +182,10 @@ def main():
         # Policy") without the metadata paragraph silently overflowing onto
         # a real page 2 (confirmed failure mode of an earlier version of
         # these numbers — shifts every subsequent page number by one).
-        # Positioned deliberately higher than dead-center — a classic
-        # upper-third title-page composition reads better than true
-        # vertical centering, which left large disconnected gaps above and
-        # below the title with nothing tying the page together. A 1-line
-        # title sits with more breathing room above its metadata than a
-        # 2-line title gets — an accepted asymmetry given there's only one
-        # space_before knob per style and no per-document conditional logic
-        # available here. A 3-line title (no real policy name in this
-        # workspace gets close) would need these numbers revisited.
-        shade_title_style(doc, size=Pt(24), text_color=RGBColor(0xFF, 0xFF, 0xFF), space_before=Pt(140))
+        style_title(doc, size=Pt(24), text_color=ACCENT, space_before=Pt(18), space_after=Pt(16))
         style_meta_line(
             doc, 'Author', size=Pt(11), text_color=GRAY,
-            space_before=Pt(200), space_after=Pt(2), top_border=True,
+            space_before=Pt(100), space_after=Pt(2),
         )
         style_meta_line(
             doc, 'Date', size=Pt(10), text_color=GRAY,
@@ -233,10 +199,24 @@ def main():
 
         # Footer: centered page number — but not on page 1. Page 1 is
         # always the title page for policy documents (or the only page
-        # for a short template), and a page number there reads oddly next
-        # to a title panel with no visible page content yet. Templates
-        # that run past one page still get numbered from their actual
-        # page 2 onward, same as policies.
+        # for a short template), and a page number there reads oddly with
+        # no visible page content yet. Templates that run past one page
+        # still get numbered from their actual page 2 onward, same as
+        # policies.
+        #
+        # The XML this produces is spec-correct (titlePg set, a distinct
+        # empty w:type="first" footer, a separate w:type="default" footer
+        # carrying the PAGE field) and Word/Google Docs honor it exactly
+        # as intended. LibreOffice 26.2 headless does not: verified with an
+        # isolated minimal docx that as soon as ANY header is present —
+        # even one identically defined for first-page and default, with no
+        # other asymmetry at all — LO leaks the default footer's page
+        # number onto page 1 regardless. This reproduces with or without
+        # the brand header below, so it isn't something introduced by this
+        # design; it's the same category of LO-headless-only limitation as
+        # the TOC-field-population issue noted further down (a rendering
+        # tool gap, not a document defect) and isn't worth chasing further
+        # here — Word and Google Docs are the real targets.
         section.different_first_page_header_footer = True
         section.first_page_footer.is_linked_to_previous = False
         section.first_page_footer.paragraphs[0].text = ""
@@ -261,22 +241,21 @@ def main():
         r_element.append(instr)
         r_element.append(fld_end)
 
-        # Header: logo, top-left, small, on every page of every document.
-        # Defined for BOTH the first page and the default (2+) case, even
-        # though the content is identical — tracked down via isolated
-        # testing that LibreOffice's title-page handling gets confused
-        # when a default header exists without a matching first-page
-        # header alongside a first-page footer: it silently ignores the
-        # first-page *footer* distinction too (the page number leaked
-        # onto page 1 even though the XML was structurally correct).
-        # Defining both symmetrically, even when they render the same
-        # logo, avoids that asymmetric-reference bug entirely.
+        # Header: logo, centered, large enough to anchor the title page
+        # (see LOGO_HEIGHT/style_title above — it sits directly above
+        # Title as one block). Defined explicitly for BOTH first-page and
+        # default: with titlePg set (see the footer comment above), an
+        # undefined first-page header renders BLANK per spec rather than
+        # inheriting the default — and the title page is exactly where we
+        # want the logo, so it needs its own explicit reference. Content
+        # happens to be identical on every page here, which also just
+        # reads as a reasonable consistent brand presence throughout.
         for header_obj in (section.first_page_header, section.header):
             header_obj.is_linked_to_previous = False
             header_para = header_obj.paragraphs[0]
-            header_para.alignment = 0  # left
+            header_para.alignment = 1  # center
             run = header_para.add_run()
-            run.add_picture(str(LOGO_PNG), height=Cm(0.5))
+            run.add_picture(str(LOGO_PNG), height=LOGO_HEIGHT)
 
         # Tell any compliant consumer (Word, in particular) to refresh all
         # fields — including the policy TOC field — the moment the
