@@ -65,7 +65,7 @@ def set_style_font_color(doc, style_name, color=None, bold=None, size=None):
         style.font.size = size
 
 
-def shade_title_style(doc, size, text_color, bold=True, space_before=Pt(16), pad_bottom=Pt(16), pad_h_twips=180):
+def shade_title_style(doc, size, text_color, bold=True, space_before=Pt(16), pad_bottom=Pt(24), pad_h_twips=320):
     """Turn the Title style into a self-contained colored panel: shaded,
     inset a bit further than the paragraph's own indent so text never
     touches the box edge. Deliberately does NOT bleed past the page
@@ -103,14 +103,20 @@ def shade_title_style(doc, size, text_color, bold=True, space_before=Pt(16), pad
     style.paragraph_format.line_spacing = 1.15
 
 
-def style_meta_line(doc, style_name, size, text_color, space_before=Pt(0), space_after=Pt(2)):
+def style_meta_line(doc, style_name, size, text_color, space_before=Pt(0), space_after=Pt(2), top_border=False):
     """Author/Date sit outside the colored title panel entirely — plain
     text on the page background, per direct feedback that company name
     and version info read better outside the block than crammed inside
     it. Both styles are basedOn Title in Pandoc's default reference.docx,
     so they inherit Title's shading/indent through the style cascade —
     not setting anything here would silently leave them shaded. Override
-    both explicitly rather than relying on absence."""
+    both explicitly rather than relying on absence.
+
+    top_border adds a thin rule above the paragraph — used on Author (the
+    first metadata line) as a visual anchor between the title panel and
+    the metadata below it, since bringing the panel up to a tighter
+    upper-third position left the metadata block looking a little
+    disconnected on its own."""
     style = doc.styles[style_name]
     pPr = style.element.get_or_add_pPr()
     shd = OxmlElement('w:shd')
@@ -130,6 +136,18 @@ def style_meta_line(doc, style_name, size, text_color, space_before=Pt(0), space
     style.font.bold = False
     style.paragraph_format.space_before = space_before
     style.paragraph_format.space_after = space_after
+    if top_border:
+        # OOXML paragraph borders (w:pBdr), like shading, are strictly
+        # straight lines — no corner-radius concept exists at this level,
+        # same constraint that rules out rounding the title panel itself.
+        pBdr = OxmlElement('w:pBdr')
+        top = OxmlElement('w:top')
+        top.set(qn('w:val'), 'single')
+        top.set(qn('w:sz'), '8')
+        top.set(qn('w:space'), '8')
+        top.set(qn('w:color'), MASTHEAD_HEX)
+        pBdr.append(top)
+        pPr.append(pBdr)
 
 
 def main():
@@ -184,25 +202,24 @@ def main():
         # content Pandoc itself generates — not reachable via
         # --reference-doc styling).
         #
-        # These numbers are deliberately NOT tuned to look perfect for a
-        # 1-line title — they're tuned so a 2-line WRAPPED title (tested:
-        # "Remote Access and Bring-Your-Own-Device (BYOD) Security
-        # Policy") still fits within the 9in body area on an 8.5x11 page
-        # with a real buffer to spare, since the actual failure mode of
-        # cutting this too close isn't "looks slightly off-center" — it's
-        # the metadata paragraph silently overflowing onto a real page 2,
-        # shifting every subsequent page number by one (confirmed by
-        # testing: the first version of these numbers did exactly that).
-        # A 1-line title consequently sits a bit higher than dead-center
-        # with more breathing room above its metadata than a 2-line title
-        # gets — an accepted asymmetry given there's only one space_before
-        # knob per style and no per-document conditional logic available
-        # here. A 3-line title (no real policy name in this workspace
-        # gets close) would need these numbers revisited.
-        shade_title_style(doc, size=Pt(24), text_color=RGBColor(0xFF, 0xFF, 0xFF), space_before=Pt(300))
+        # These numbers still need to survive a 2-line WRAPPED title
+        # (tested: "Remote Access and Bring-Your-Own-Device (BYOD) Security
+        # Policy") without the metadata paragraph silently overflowing onto
+        # a real page 2 (confirmed failure mode of an earlier version of
+        # these numbers — shifts every subsequent page number by one).
+        # Positioned deliberately higher than dead-center — a classic
+        # upper-third title-page composition reads better than true
+        # vertical centering, which left large disconnected gaps above and
+        # below the title with nothing tying the page together. A 1-line
+        # title sits with more breathing room above its metadata than a
+        # 2-line title gets — an accepted asymmetry given there's only one
+        # space_before knob per style and no per-document conditional logic
+        # available here. A 3-line title (no real policy name in this
+        # workspace gets close) would need these numbers revisited.
+        shade_title_style(doc, size=Pt(24), text_color=RGBColor(0xFF, 0xFF, 0xFF), space_before=Pt(140))
         style_meta_line(
             doc, 'Author', size=Pt(11), text_color=GRAY,
-            space_before=Pt(200), space_after=Pt(2),
+            space_before=Pt(200), space_after=Pt(2), top_border=True,
         )
         style_meta_line(
             doc, 'Date', size=Pt(10), text_color=GRAY,
@@ -260,6 +277,19 @@ def main():
             header_para.alignment = 0  # left
             run = header_para.add_run()
             run.add_picture(str(LOGO_PNG), height=Cm(0.5))
+
+        # Tell any compliant consumer (Word, in particular) to refresh all
+        # fields — including the policy TOC field — the moment the
+        # document is opened, so a reader never has to manually press F9.
+        # This does NOT fix LibreOffice's headless PDF export, which was
+        # confirmed (by testing both this flag and an export-filter option)
+        # to leave the TOC field unpopulated regardless — a rendering-tool
+        # limitation, not a document defect. Word honors this flag per
+        # spec, and Google Docs independently converts the field to its
+        # own live, auto-refreshing TOC object at import time either way.
+        update_fields = OxmlElement('w:updateFields')
+        update_fields.set(qn('w:val'), 'true')
+        doc.settings.element.insert(0, update_fields)
 
         # Pandoc's own default reference.docx body is just a swatch of
         # literal style-name placeholders ("Heading 1", "Body Text.", ...)
