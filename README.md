@@ -15,8 +15,12 @@ that's defined — this repo isn't meant to be reused for that entity.
 - [colors.md](colors.md) — color palette (confirmed + derived)
 - [typography.md](typography.md) — typeface decision for generated documents
 - `logo/` — see below
-- `pandoc/build-reference.py` — regenerates `pandoc/reference.docx`, the
-  actual style template both doc repos pass to Pandoc via `--reference-doc`
+- `pandoc/build-reference.py` — regenerates both `pandoc/reference.docx`
+  (policies/templates: restrained typographic title page) and
+  `pandoc/reference-report.docx` (reports: a graphic cover page with a
+  large white logo on a violet panel) — the two style templates the doc
+  repos' sync pipelines pass to Pandoc via `--reference-doc`, chosen per
+  document based on its detected doc type
 
 ## Logo
 
@@ -47,6 +51,8 @@ mark so it never touches the image edge.
 ## How other repos use this
 
 `tenx-doc-templates` and `tenx-documents`' sync pipelines check out this
-repo in CI and pass `pandoc/reference.docx` to Pandoc via `--reference-doc`.
-Update a color, the logo, or the reference-doc build script here once;
-every document picks it up on its next sync — no per-document styling.
+repo in CI and pass one of the two `pandoc/*.docx` files to Pandoc via
+`--reference-doc`, selected per document by its detected doc type (policy/
+template vs. report). Update a color, the logo, or the reference-doc build
+script here once; every document picks it up on its next sync — no
+per-document styling.
