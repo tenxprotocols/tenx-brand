@@ -2,81 +2,117 @@
 """Generate pandoc/assets/report-cover-art.png — the decorative graphic on
 the report cover (see build_report_reference() in build-reference.py).
 
-Deliberately NOT a generic stock wireframe/hexagon-network graphic, and
-deliberately NOT the icon's three triangles scattered apart either (an
-earlier attempt at that read as generic geometric confetti, disconnected
-from the brand). This instead uses the icon mark WHOLE and large,
-cropped off the edge of the canvas like a watermark, tone-on-tone in a
-lighter violet — a real, recognizable extension of the brand mark rather
-than borrowed decoration or abstracted-into-meaninglessness shapes. Same
-"icon over wordmark" logo asset library that already exists is left
-untouched — this is a one-off derived asset, not a fifth logo
-composition, since no other context needs an oversized cropped watermark.
+A low-poly triangular mosaic in a handful of violet shades, in the spirit
+of ref4's faceted-polygon texture (one of the templatelab.com cover-page
+references the report cover is modeled on) — NOT a generic stock
+wireframe/hexagon-network graphic.
+
+History of what didn't work, kept here so it isn't retried:
+- OOXML paragraph shading patterns (w:shd val="diagStripe" etc.) looked
+  like the "free" way to get real geometric texture with no image at all
+  — tested directly in a minimal docx and LibreOffice 26.2 headless
+  renders EVERY pattern value as a flat solid block, ignoring the
+  pattern entirely. Dead end for anything renderable here.
+- Two small, low-opacity (~0.15-0.24) tone-on-tone copies of the whole
+  icon mark, scattered on the masthead band — read as "a large block of
+  purple" per direct feedback, not a visible pattern. This mosaic
+  replaces that: opaque, high-contrast, and sized to cover the entire
+  masthead band, not tucked into a small corner of it.
+- Before THAT: the icon's three individual triangles repeated at
+  different scales/rotations — read as disconnected geometric confetti.
 
 Rasterizes via rsvg-convert directly, not ImageMagick's `magick ... svg`
 delegate — see logo/build-logos.py's rasterize() docstring for why
 (that delegate crashes on this repo's SVGs; direct invocation doesn't).
 """
+import random
 import subprocess
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
+REPO_ROOT = HERE.parent
 ASSETS_DIR = HERE / "assets"
 OUTPUT = ASSETS_DIR / "report-cover-art.png"
+LOGO_WHITE = REPO_ROOT / "logo" / "png" / "lockup-horizontal-white-512.png"
 
-ICON_PATHS = [
-    'M22.2679 30H6.87012L14.5684 22.3006L22.2679 30Z',
-    'M18.4356 4.9061L25.2009 11.6703L30 6.87012V24.2015L5.79853 0H23.3417L18.4356 4.9061Z',
-    'M7.80424 15.5364L0 23.3417V7.73212L7.80424 15.5364Z',
-]
-ICON_SIZE = 30.13  # icon.svg's viewBox is 0 0 30.13 30.13
+# Canvas: matches the masthead band's actual aspect ratio (wide banner).
+W, H = 1600, 900
+PNG_HEIGHT = 1350  # 1.5x for a crisp raster at print size
 
-# Canvas: a wide banner strip, sized for the report cover's decoration zone.
-W, H = 1600, 520
-PNG_HEIGHT = 1040  # 2x W/H for a crisp raster at print size
-
-# Two instances of the WHOLE icon (not its individual triangles): a
-# moderate one on the right, a smaller quieter one on the left — both
-# fully visible. An earlier attempt let the large instance bleed off the
-# canvas edge as a "watermark," but at that scale the crop cut through
-# the icon's own negative space and left only unrecognizable fragments
-# in the corner — kept whole instead, since a recognizable mark, even
-# smaller, beats an oversized illegible one.
-INSTANCES = [
-    (3.4, 1430, 260, 16, 0.24),
-    (2.1, 230, 380, -12, 0.16),
+COVER_HEX = "#3D1A5B"
+# A small palette of violet shades spanning both lighter and darker than
+# COVER_HEX, so facets read as genuine light/shadow variation rather than
+# random noise — weighted so COVER_HEX-adjacent tones dominate and the
+# lightest/darkest are accents, not half the mosaic.
+PALETTE = [
+    "#3D1A5B",  # base
+    "#3D1A5B",
+    "#4B2570",  # lighter step 1
+    "#4B2570",
+    "#5B3486",  # lighter step 2
+    "#2E1345",  # darker step 1
+    "#6B4499",  # lighter step 3 (accent)
+    "#241033",  # darker step 2 (accent)
 ]
 
-ART_VIOLET = "#8B6BB8"  # a mid violet, lighter than COVER_HEX (#3D1A5B) — tone-on-tone, not a contrasting accent
+COLS, ROWS = 14, 8
+JITTER = 0.35  # fraction of a cell the shared grid vertices wander, for an organic (not perfectly uniform) low-poly look
+
+SEED = 20260714  # fixed, not random.random() with no seed — reproducible output, stable git diffs on regeneration
 
 
-def instance_markup(scale, x, y, rotation, opacity):
-    paths = "\n".join(f'    <path d="{d}"/>' for d in ICON_PATHS)
-    # Center the icon's own viewBox before scaling/rotating, so (x, y) is
-    # where the icon's center lands, not its top-left corner.
-    half = ICON_SIZE / 2
-    return (
-        f'  <g transform="translate({x},{y}) rotate({rotation}) scale({scale}) '
-        f'translate({-half},{-half})" fill="{ART_VIOLET}" fill-opacity="{opacity}">\n'
-        f'{paths}\n'
-        f'  </g>'
-    )
+def build_grid():
+    """A COLS x ROWS grid of points, each perturbed by a seeded random
+    jitter so shared vertices between triangles still line up (no gaps),
+    but the mesh doesn't look like a perfectly regular grid."""
+    rng = random.Random(SEED)
+    cell_w, cell_h = W / COLS, H / ROWS
+    points = {}
+    for row in range(ROWS + 1):
+        for col in range(COLS + 1):
+            x, y = col * cell_w, row * cell_h
+            # Don't jitter the outer border — keeps the mosaic's edges
+            # flush with the canvas, no ragged/transparent edge gaps.
+            if 0 < row < ROWS:
+                y += rng.uniform(-JITTER, JITTER) * cell_h
+            if 0 < col < COLS:
+                x += rng.uniform(-JITTER, JITTER) * cell_w
+            points[(row, col)] = (x, y)
+    return points
+
+
+def triangle_markup(p1, p2, p3, color):
+    pts = f"{p1[0]:.1f},{p1[1]:.1f} {p2[0]:.1f},{p2[1]:.1f} {p3[0]:.1f},{p3[1]:.1f}"
+    return f'  <polygon points="{pts}" fill="{color}"/>'
 
 
 def main():
     ASSETS_DIR.mkdir(exist_ok=True)
-    groups = "\n".join(instance_markup(*inst) for inst in INSTANCES)
-    # Solid COVER_HEX background baked into the image itself, not left
-    # transparent — found (by rendering a test docx) that LibreOffice
-    # doesn't reliably composite a transparent PNG's background against
-    # the shaded paragraph color it's placed in; a large image's
-    # transparent area rendered as plain white instead of showing the
-    # violet paragraph shading through it. Baking the same background
-    # color in removes the dependency on that compositing entirely.
-    background = f'  <rect x="0" y="0" width="{W}" height="{H}" fill="#3D1A5B"/>'
+    points = build_grid()
+    rng = random.Random(SEED + 1)
+    triangles = []
+    for row in range(ROWS):
+        for col in range(COLS):
+            tl, tr = points[(row, col)], points[(row, col + 1)]
+            bl, br = points[(row + 1, col)], points[(row + 1, col + 1)]
+            # Split each grid cell into two triangles along a diagonal
+            # that alternates direction per cell — a real low-poly mesh
+            # doesn't cut every cell the same way, and alternating avoids
+            # a repetitive chevron artifact a uniform diagonal would show.
+            if (row + col) % 2 == 0:
+                triangles.append((tl, tr, bl))
+                triangles.append((tr, br, bl))
+            else:
+                triangles.append((tl, tr, br))
+                triangles.append((tl, br, bl))
+    shapes = "\n".join(
+        triangle_markup(a, b, c, rng.choice(PALETTE)) for a, b, c in triangles
+    )
     svg = (
         f'<svg width="{W}" height="{H}" viewBox="0 0 {W} {H}" '
-        f'xmlns="http://www.w3.org/2000/svg">\n{background}\n{groups}\n</svg>\n'
+        f'xmlns="http://www.w3.org/2000/svg">\n'
+        f'  <rect x="0" y="0" width="{W}" height="{H}" fill="{COVER_HEX}"/>\n'
+        f'{shapes}\n</svg>\n'
     )
     svg_path = ASSETS_DIR / "report-cover-art.svg"
     svg_path.write_text(svg)
@@ -85,6 +121,25 @@ def main():
          "-o", str(OUTPUT), str(svg_path)],
         check=True,
     )
+
+    # Composite the logo directly onto the mosaic (top-left, padded) so
+    # the reference doc only has to insert ONE image for the whole
+    # masthead — the header no longer needs a separate logo paragraph
+    # plus a separate art paragraph with their own independent spacing to
+    # tune against each other.
+    logo_height = round(PNG_HEIGHT * 0.11)
+    pad = round(PNG_HEIGHT * 0.07)
+    composited = ASSETS_DIR / "report-cover-art.tmp.png"
+    subprocess.run(
+        [
+            "magick", str(OUTPUT),
+            "(", str(LOGO_WHITE), "-resize", f"x{logo_height}", ")",
+            "-gravity", "NorthWest", "-geometry", f"+{pad}+{pad}", "-composite",
+            str(composited),
+        ],
+        check=True,
+    )
+    composited.replace(OUTPUT)
     print(f"saved {OUTPUT}")
 
 
